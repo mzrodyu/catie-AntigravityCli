@@ -1,6 +1,7 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.pool import StaticPool
+from sqlalchemy import text
 
 from app.config import settings
 
@@ -27,8 +28,8 @@ async def init_db():
     
     # 启用 WAL 模式
     async with engine.begin() as conn:
-        await conn.execute("PRAGMA journal_mode=WAL")
-        await conn.execute("PRAGMA busy_timeout=30000")
+        await conn.execute(text("PRAGMA journal_mode=WAL"))
+        await conn.execute(text("PRAGMA busy_timeout=30000"))
 
 
 async def get_db():
