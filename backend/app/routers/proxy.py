@@ -167,6 +167,9 @@ async def proxy_to_antigravity(body: dict, stream: bool, token_id: int, db: Asyn
     
     print(f"[Proxy] Claude: 转发到 Antigravity 服务, model: {body.get('model')}", flush=True)
     
+    # 使用配置的 Antigravity API Key
+    api_key = settings.antigravity_api_key
+    
     try:
         async with httpx.AsyncClient(timeout=300) as client:
             if stream:
@@ -175,7 +178,7 @@ async def proxy_to_antigravity(body: dict, stream: bool, token_id: int, db: Asyn
                         async with client.stream(
                             "POST",
                             f"{settings.antigravity_api_base}/chat/completions",
-                            headers={"Authorization": f"Bearer {antigravity_token}", "Content-Type": "application/json"},
+                            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                             json=body
                         ) as response:
                             if response.status_code != 200:
@@ -198,7 +201,7 @@ async def proxy_to_antigravity(body: dict, stream: bool, token_id: int, db: Asyn
             else:
                 response = await client.post(
                     f"{settings.antigravity_api_base}/chat/completions",
-                    headers={"Authorization": f"Bearer {antigravity_token}", "Content-Type": "application/json"},
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                     json=body
                 )
                 if response.status_code != 200:

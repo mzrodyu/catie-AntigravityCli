@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     
     # Antigravity API
     antigravity_api_base: str = "http://127.0.0.1:8045/v1"
+    antigravity_api_key: str = "sk-test"  # Antigravity 服务的 API Key
     
     # Google OAuth
     google_client_id: str = ""
