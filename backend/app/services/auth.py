@@ -36,6 +36,24 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     return jwt.encode(to_encode, settings.secret_key, algorithm=ALGORITHM)
 
 
+async def get_user_by_api_key(db: AsyncSession, api_key: str) -> Optional[User]:
+    """通过 API Key 获取用户（API Key = JWT token 或 sk-前缀格式）"""
+    # 移除 sk- 前缀
+    if api_key.startswith("sk-"):
+        api_key = api_key[3:]
+    
+    try:
+        payload = jwt.decode(api_key, settings.secret_key, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            return None
+    except JWTError:
+        return None
+    
+    result = await db.execute(select(User).where(User.username == username))
+    return result.scalar_one_or_none()
+
+
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: AsyncSession = Depends(get_db)
@@ -46,8 +64,13 @@ async def get_current_user(
             detail="未登录"
         )
     
+    token = credentials.credentials
+    # 支持 sk- 前缀
+    if token.startswith("sk-"):
+        token = token[3:]
+    
     try:
-        payload = jwt.decode(credentials.credentials, settings.secret_key, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
         if username is None:
             raise HTTPException(status_code=401, detail="无效的token")
