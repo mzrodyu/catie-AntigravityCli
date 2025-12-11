@@ -281,7 +281,7 @@ export default function Dashboard({ user, onLogout, setUser }) {
                 onClick={startOAuth}
                 className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-500 flex items-center gap-2"
               >
-                <LogIn size={18} />
+                <Rocket size={18} />
                 OAuth 登录
               </button>
               <button
