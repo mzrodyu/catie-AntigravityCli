@@ -1,6 +1,8 @@
 import {
     CheckCircle,
-    Copy, ExternalLink,
+    Copy,
+    Edit3,
+    ExternalLink,
     Gift,
     Key,
     LogOut,
@@ -280,7 +282,7 @@ export default function Dashboard({ user, onLogout, setUser }) {
                 onClick={startOAuth}
                 className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-500 flex items-center gap-2"
               >
-                <Chrome size={18} />
+                <Globe size={18} />
                 OAuth 登录
               </button>
               <button
