@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from datetime import date
 import json
+import httpx
 
 from app.database import get_db
 from app.models.user import User, UsageLog
@@ -11,6 +12,11 @@ from app.services.auth import get_current_user
 from app.services.token_pool import TokenPool
 from app.services.gemini_client import GeminiClient
 from app.config import settings
+
+
+def is_claude_model(model: str) -> bool:
+    """判断是否是 Claude 模型"""
+    return "claude" in model.lower()
 
 router = APIRouter(prefix="/v1", tags=["API代理"])
 
@@ -38,17 +44,27 @@ async def list_models(
     db: AsyncSession = Depends(get_db)
 ):
     """获取可用模型列表"""
-    base_models = [
+    # Gemini 模型
+    gemini_models = [
         "gemini-2.5-pro",
         "gemini-2.5-flash",
         "gemini-3-pro-preview",
     ]
     
+    # Claude 模型（通过 Antigravity 服务）
+    claude_models = [
+        "claude-4.5",
+        "claude-4.5-op",
+    ]
+    
     models = []
-    for base in base_models:
+    for base in gemini_models:
         models.append({"id": base, "object": "model", "owned_by": "google"})
         models.append({"id": f"假流式/{base}", "object": "model", "owned_by": "google"})
         models.append({"id": f"流式抗截断/{base}", "object": "model", "owned_by": "google"})
+    
+    for base in claude_models:
+        models.append({"id": base, "object": "model", "owned_by": "anthropic"})
     
     return {"object": "list", "data": models}
 
@@ -59,7 +75,7 @@ async def chat_completions(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """聊天补全 API - 直接调用 Google Cloud API"""
+    """聊天补全 API"""
     await check_quota(user, db)
     
     body = await request.json()
@@ -77,23 +93,24 @@ async def chat_completions(
     
     token_id, token_obj = token_info
     
-    # 获取有效的 access_token（自动刷新）
-    access_token = await TokenPool.get_access_token(token_obj, db)
-    if not access_token:
-        await TokenPool.report_failure(db, token_id, "Token 刷新失败")
-        raise HTTPException(status_code=503, detail="Token 已失效，无法刷新")
-    
-    # 获取 project_id
-    project_id = token_obj.project_id or ""
-    
-    print(f"[Proxy] 使用 Token #{token_id}, project_id: {project_id}, model: {model}", flush=True)
-    
     # 记录使用
     log = UsageLog(user_id=user.id, token_id=token_id, model=model)
     db.add(log)
     await db.commit()
     
-    # 创建 Gemini 客户端
+    # Claude 模型 -> 转发到 Antigravity 服务
+    if is_claude_model(model):
+        return await proxy_to_antigravity(body, stream, token_id, db)
+    
+    # Gemini 模型 -> 直接调用 Google API
+    access_token = await TokenPool.get_access_token(token_obj, db)
+    if not access_token:
+        await TokenPool.report_failure(db, token_id, "Token 刷新失败")
+        raise HTTPException(status_code=503, detail="Token 已失效，无法刷新")
+    
+    project_id = token_obj.project_id or ""
+    print(f"[Proxy] Gemini: Token #{token_id}, project_id: {project_id}, model: {model}", flush=True)
+    
     client = GeminiClient(access_token, project_id)
     
     try:
@@ -125,6 +142,71 @@ async def chat_completions(
             await TokenPool.report_success(db, token_id)
             return JSONResponse(content=result)
     
+    except Exception as e:
+        await TokenPool.report_failure(db, token_id, str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def proxy_to_antigravity(body: dict, stream: bool, token_id: int, db: AsyncSession):
+    """转发请求到 Antigravity 服务（用于 Claude 模型）"""
+    from app.services.crypto import decrypt_token
+    from app.models.user import Token
+    
+    # 获取原始 token
+    result = await db.execute(select(Token).where(Token.id == token_id))
+    token_obj = result.scalar_one_or_none()
+    if not token_obj:
+        raise HTTPException(status_code=503, detail="Token 不存在")
+    
+    decrypted = decrypt_token(token_obj.token)
+    # 解析 token 格式
+    token_data = TokenPool.parse_token_data(decrypted)
+    antigravity_token = token_data["access_token"]
+    
+    print(f"[Proxy] Claude: 转发到 Antigravity 服务, model: {body.get('model')}", flush=True)
+    
+    try:
+        async with httpx.AsyncClient(timeout=300) as client:
+            if stream:
+                async def stream_response():
+                    try:
+                        async with client.stream(
+                            "POST",
+                            f"{settings.antigravity_api_base}/chat/completions",
+                            headers={"Authorization": f"Bearer {antigravity_token}", "Content-Type": "application/json"},
+                            json=body
+                        ) as response:
+                            if response.status_code != 200:
+                                error_text = await response.aread()
+                                await TokenPool.report_failure(db, token_id, error_text.decode())
+                                yield f"data: {json.dumps({'error': error_text.decode()})}\n\n"
+                                return
+                            async for chunk in response.aiter_bytes():
+                                yield chunk
+                            await TokenPool.report_success(db, token_id)
+                    except Exception as e:
+                        await TokenPool.report_failure(db, token_id, str(e))
+                        yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                
+                return StreamingResponse(
+                    stream_response(),
+                    media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "Connection": "keep-alive"}
+                )
+            else:
+                response = await client.post(
+                    f"{settings.antigravity_api_base}/chat/completions",
+                    headers={"Authorization": f"Bearer {antigravity_token}", "Content-Type": "application/json"},
+                    json=body
+                )
+                if response.status_code != 200:
+                    await TokenPool.report_failure(db, token_id, response.text)
+                    raise HTTPException(status_code=response.status_code, detail=response.text)
+                await TokenPool.report_success(db, token_id)
+                return JSONResponse(content=response.json())
+    except httpx.TimeoutException:
+        await TokenPool.report_failure(db, token_id, "请求超时")
+        raise HTTPException(status_code=504, detail="请求超时")
     except Exception as e:
         await TokenPool.report_failure(db, token_id, str(e))
         raise HTTPException(status_code=500, detail=str(e))
