@@ -281,14 +281,14 @@ export default function Dashboard({ user, onLogout, setUser }) {
                 onClick={startOAuth}
                 className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-500 flex items-center gap-2"
               >
-                <Globe2 size={18} />
+                <LogIn size={18} />
                 OAuth 登录
               </button>
               <button
                 onClick={() => setShowManual(true)}
                 className="px-4 py-2 bg-cyan-600 text-white rounded-lg hover:bg-cyan-500 flex items-center gap-2"
               >
-                <PenLine size={18} />
+                <Key size={18} />
                 手动填入
               </button>
               <button
