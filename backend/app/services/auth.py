@@ -11,8 +11,8 @@ from app.config import settings
 from app.database import get_db
 from app.models.user import User
 
-# 密码加密
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# 密码加密 - 使用 argon2 避免 bcrypt 兼容性问题
+pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
 # JWT 配置
 ALGORITHM = "HS256"
@@ -22,13 +22,11 @@ security = HTTPBearer(auto_error=False)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    # bcrypt 限制密码最多72字节
-    return pwd_context.verify(plain_password[:72], hashed_password)
+    return pwd_context.verify(plain_password, hashed_password)
 
 
 def get_password_hash(password: str) -> str:
-    # bcrypt 限制密码最多72字节
-    return pwd_context.hash(password[:72])
+    return pwd_context.hash(password)
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
