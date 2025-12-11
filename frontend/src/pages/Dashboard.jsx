@@ -29,6 +29,7 @@ export default function Dashboard({ user, onLogout, setUser }) {
   const [oauthUrl, setOauthUrl] = useState('')
   const [callbackUrl, setCallbackUrl] = useState('')
   const [manualToken, setManualToken] = useState({ access_token: '', refresh_token: '', expires_in: 3600 })
+  const [showApiKey, setShowApiKey] = useState(false)
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -245,17 +246,25 @@ export default function Dashboard({ user, onLogout, setUser }) {
               </div>
             </div>
             <div>
-              <label className="text-gray-400 text-sm">API Key</label>
+              <label className="text-gray-400 text-sm">API Key（点击复制按钮获取完整密钥）</label>
               <div className="flex gap-2 mt-1">
                 <input
-                  type="password"
-                  value="sk-••••••••••••••••"
+                  type={showApiKey ? "text" : "password"}
+                  value={localStorage.getItem('token') || ''}
                   readOnly
-                  className="flex-1 bg-gray-700 text-white rounded-lg px-4 py-2"
+                  className="flex-1 bg-gray-700 text-white rounded-lg px-4 py-2 text-xs"
                 />
+                <button
+                  onClick={() => setShowApiKey(!showApiKey)}
+                  className="px-3 py-2 bg-gray-600 rounded-lg hover:bg-gray-500"
+                  title={showApiKey ? "隐藏" : "显示"}
+                >
+                  <ExternalLink size={18} className="text-white" />
+                </button>
                 <button
                   onClick={copyApiKey}
                   className="px-3 py-2 bg-purple-600 rounded-lg hover:bg-purple-500"
+                  title="复制完整 API Key"
                 >
                   <Copy size={18} className="text-white" />
                 </button>
