@@ -41,10 +41,11 @@ app.add_middleware(
 )
 
 # 路由
-from app.routers import auth, proxy, public
+from app.routers import auth, proxy, public, oauth
 app.include_router(auth.router)
 app.include_router(proxy.router)
 app.include_router(public.router)
+app.include_router(oauth.router)
 
 # 静态文件
 static_dir = os.path.join(os.path.dirname(__file__), "static")

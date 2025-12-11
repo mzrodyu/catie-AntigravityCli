@@ -19,10 +19,15 @@ export default function Dashboard({ user, onLogout, setUser }) {
   const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(true)
   const [showUpload, setShowUpload] = useState(false)
+  const [showOAuth, setShowOAuth] = useState(false)
+  const [showManual, setShowManual] = useState(false)
   const [newToken, setNewToken] = useState('')
   const [isPublic, setIsPublic] = useState(true)
   const [uploading, setUploading] = useState(false)
   const [message, setMessage] = useState(null)
+  const [oauthUrl, setOauthUrl] = useState('')
+  const [callbackUrl, setCallbackUrl] = useState('')
+  const [manualToken, setManualToken] = useState({ access_token: '', refresh_token: '', expires_in: 3600 })
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -95,6 +100,58 @@ export default function Dashboard({ user, onLogout, setUser }) {
     navigator.clipboard.writeText(apiKey)
     setMessage({ type: 'success', text: 'API Key 已复制' })
     setTimeout(() => setMessage(null), 2000)
+  }
+
+  // OAuth 登录
+  const startOAuth = async () => {
+    try {
+      const res = await api.get('/api/oauth/auth-url')
+      setOauthUrl(res.data.auth_url)
+      setShowOAuth(true)
+      window.open(res.data.auth_url, '_blank')
+    } catch (err) {
+      setMessage({ type: 'error', text: err.response?.data?.detail || 'OAuth 初始化失败' })
+    }
+  }
+
+  // 提交 OAuth 回调
+  const submitOAuthCallback = async () => {
+    if (!callbackUrl) return
+    setUploading(true)
+    try {
+      const res = await api.post('/api/oauth/callback', {
+        callback_url: callbackUrl,
+        is_public: isPublic
+      })
+      setMessage({ type: 'success', text: `凭证获取成功！邮箱: ${res.data.email}` })
+      setShowOAuth(false)
+      setCallbackUrl('')
+      loadData()
+    } catch (err) {
+      setMessage({ type: 'error', text: err.response?.data?.detail || '回调处理失败' })
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  // 手动填入 Token
+  const submitManualToken = async () => {
+    if (!manualToken.access_token || !manualToken.refresh_token) return
+    setUploading(true)
+    try {
+      const res = await api.post('/api/oauth/manual', {
+        ...manualToken,
+        is_public: isPublic
+      })
+      setMessage({ type: 'success', text: `Token 添加成功！${res.data.email ? `邮箱: ${res.data.email}` : ''}` })
+      setShowManual(false)
+      setManualToken({ access_token: '', refresh_token: '', expires_in: 3600 })
+      loadData()
+    } catch (err) {
+      setMessage({ type: 'error', text: err.response?.data?.detail || '添加失败' })
+    } finally {
+      setUploading(false)
+    }
   }
 
   if (loading) {
@@ -220,6 +277,20 @@ export default function Dashboard({ user, onLogout, setUser }) {
                 刷新
               </button>
               <button
+                onClick={startOAuth}
+                className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-500 flex items-center gap-2"
+              >
+                <Chrome size={18} />
+                OAuth 登录
+              </button>
+              <button
+                onClick={() => setShowManual(true)}
+                className="px-4 py-2 bg-cyan-600 text-white rounded-lg hover:bg-cyan-500 flex items-center gap-2"
+              >
+                <Edit3 size={18} />
+                手动填入
+              </button>
+              <button
                 onClick={() => setShowUpload(true)}
                 className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-500 flex items-center gap-2"
               >
@@ -228,6 +299,128 @@ export default function Dashboard({ user, onLogout, setUser }) {
               </button>
             </div>
           </div>
+
+          {/* OAuth Modal */}
+          {showOAuth && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+              <div className="bg-gray-800 rounded-xl p-6 w-full max-w-lg mx-4">
+                <h3 className="text-xl font-semibold text-white mb-4">OAuth 登录获取凭证</h3>
+                <div className="mb-4">
+                  <p className="text-gray-400 text-sm mb-3">
+                    1. 点击下方按钮打开 Google 授权页面<br/>
+                    2. 完成授权后，复制浏览器地址栏的完整 URL<br/>
+                    3. 粘贴到下方输入框并提交
+                  </p>
+                  <button
+                    onClick={() => window.open(oauthUrl, '_blank')}
+                    className="w-full px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-500 mb-4"
+                  >
+                    打开授权页面
+                  </button>
+                  <label className="text-gray-400 text-sm mb-2 block">回调 URL</label>
+                  <input
+                    type="text"
+                    value={callbackUrl}
+                    onChange={(e) => setCallbackUrl(e.target.value)}
+                    className="w-full bg-gray-700 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-green-500"
+                    placeholder="粘贴 http://localhost:8080/?code=... 的完整 URL"
+                  />
+                </div>
+                <div className="mb-4">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={isPublic}
+                      onChange={(e) => setIsPublic(e.target.checked)}
+                      className="w-5 h-5 rounded bg-gray-700"
+                    />
+                    <span className="text-white">捐赠到公共池（获得额度奖励）</span>
+                  </label>
+                </div>
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => { setShowOAuth(false); setCallbackUrl(''); }}
+                    className="flex-1 px-4 py-2 bg-gray-700 text-gray-300 rounded-lg hover:bg-gray-600"
+                  >
+                    取消
+                  </button>
+                  <button
+                    onClick={submitOAuthCallback}
+                    disabled={uploading || !callbackUrl}
+                    className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-500 disabled:opacity-50"
+                  >
+                    {uploading ? '处理中...' : '提交'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Manual Token Modal */}
+          {showManual && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+              <div className="bg-gray-800 rounded-xl p-6 w-full max-w-lg mx-4">
+                <h3 className="text-xl font-semibold text-white mb-4">手动填入 Token</h3>
+                <div className="space-y-4 mb-4">
+                  <div>
+                    <label className="text-gray-400 text-sm mb-2 block">Access Token</label>
+                    <textarea
+                      value={manualToken.access_token}
+                      onChange={(e) => setManualToken({...manualToken, access_token: e.target.value})}
+                      className="w-full bg-gray-700 text-white rounded-lg px-4 py-3 h-20 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                      placeholder="ya29.xxxxx..."
+                    />
+                  </div>
+                  <div>
+                    <label className="text-gray-400 text-sm mb-2 block">Refresh Token</label>
+                    <textarea
+                      value={manualToken.refresh_token}
+                      onChange={(e) => setManualToken({...manualToken, refresh_token: e.target.value})}
+                      className="w-full bg-gray-700 text-white rounded-lg px-4 py-3 h-20 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                      placeholder="1//xxxxx..."
+                    />
+                  </div>
+                  <div>
+                    <label className="text-gray-400 text-sm mb-2 block">过期时间（秒）</label>
+                    <input
+                      type="number"
+                      value={manualToken.expires_in}
+                      onChange={(e) => setManualToken({...manualToken, expires_in: parseInt(e.target.value) || 3600})}
+                      className="w-full bg-gray-700 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                    />
+                  </div>
+                </div>
+                <div className="mb-4">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={isPublic}
+                      onChange={(e) => setIsPublic(e.target.checked)}
+                      className="w-5 h-5 rounded bg-gray-700"
+                    />
+                    <span className="text-white">捐赠到公共池（获得额度奖励）</span>
+                  </label>
+                </div>
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => { setShowManual(false); setManualToken({ access_token: '', refresh_token: '', expires_in: 3600 }); }}
+                    className="flex-1 px-4 py-2 bg-gray-700 text-gray-300 rounded-lg hover:bg-gray-600"
+                  >
+                    取消
+                  </button>
+                  <button
+                    onClick={submitManualToken}
+                    disabled={uploading || !manualToken.access_token || !manualToken.refresh_token}
+                    className="flex-1 px-4 py-2 bg-cyan-600 text-white rounded-lg hover:bg-cyan-500 disabled:opacity-50"
+                  >
+                    {uploading ? '添加中...' : '添加'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Upload Modal */}
           {showUpload && (

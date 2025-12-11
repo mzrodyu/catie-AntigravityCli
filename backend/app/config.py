@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     # Antigravity API
     antigravity_api_base: str = "http://127.0.0.1:8045/v1"
     
+    # Google OAuth
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    
     # 公告
     announcement_enabled: bool = False
     announcement_title: str = ""
