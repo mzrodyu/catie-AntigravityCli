@@ -1,7 +1,6 @@
 import {
     CheckCircle,
     Copy,
-    Edit3,
     ExternalLink,
     Gift,
     Key,
@@ -282,14 +281,14 @@ export default function Dashboard({ user, onLogout, setUser }) {
                 onClick={startOAuth}
                 className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-500 flex items-center gap-2"
               >
-                <Globe size={18} />
+                <Globe2 size={18} />
                 OAuth 登录
               </button>
               <button
                 onClick={() => setShowManual(true)}
                 className="px-4 py-2 bg-cyan-600 text-white rounded-lg hover:bg-cyan-500 flex items-center gap-2"
               >
-                <Edit3 size={18} />
+                <PenLine size={18} />
                 手动填入
               </button>
               <button
