@@ -32,6 +32,7 @@ class Token(Base):
     # Token信息
     token = Column(Text, nullable=False)  # 加密存储的token
     email = Column(String(255), nullable=True)  # 关联邮箱
+    project_id = Column(String(255), nullable=True)  # Google Cloud 项目ID
     
     # 状态
     is_active = Column(Boolean, default=True)

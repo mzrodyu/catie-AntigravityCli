@@ -147,6 +147,37 @@ async def oauth_callback(
             if userinfo_response.status_code == 200:
                 email = userinfo_response.json().get("email")
             
+            # 获取 project_id
+            project_id = ""
+            try:
+                projects_response = await client.get(
+                    "https://cloudresourcemanager.googleapis.com/v1/projects",
+                    headers={"Authorization": f"Bearer {access_token}"}
+                )
+                if projects_response.status_code == 200:
+                    projects = projects_response.json().get("projects", [])
+                    if projects:
+                        for p in projects:
+                            if "default" in p.get("projectId", "").lower():
+                                project_id = p.get("projectId")
+                                break
+                        if not project_id:
+                            project_id = projects[0].get("projectId", "")
+                        print(f"[OAuth] 获取到 project_id: {project_id}", flush=True)
+                        
+                        # 启用必需的 API 服务
+                        for service in ["geminicloudassist.googleapis.com", "cloudaicompanion.googleapis.com"]:
+                            try:
+                                await client.post(
+                                    f"https://serviceusage.googleapis.com/v1/projects/{project_id}/services/{service}:enable",
+                                    headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+                                    json={}
+                                )
+                            except:
+                                pass
+            except Exception as e:
+                print(f"[OAuth] 获取 project_id 失败: {e}", flush=True)
+            
             # 检查是否已存在
             existing = await db.execute(
                 select(Token).where(Token.user_id == user.id, Token.email == email)
@@ -154,14 +185,19 @@ async def oauth_callback(
             if existing.scalar_one_or_none():
                 raise HTTPException(status_code=400, detail=f"该邮箱 {email} 的 Token 已存在")
             
-            # 构建 Antigravity 格式的 token
-            antigravity_token = f"{access_token}|||{refresh_token}|||{expires_in}"
+            # 计算过期时间戳
+            import time
+            expires_at = int(time.time()) + expires_in
+            
+            # 构建 token 格式: access_token|||refresh_token|||expires_at
+            stored_token = f"{access_token}|||{refresh_token}|||{expires_at}"
             
             # 保存 Token
             new_token = Token(
                 user_id=user.id,
-                token=encrypt_token(antigravity_token),
+                token=encrypt_token(stored_token),
                 email=email,
+                project_id=project_id,
                 is_active=True,
                 is_public=request.is_public,
                 supports_claude=True,
@@ -190,34 +226,66 @@ async def oauth_callback(
         raise HTTPException(status_code=500, detail=f"处理失败: {str(e)}")
 
 
+class ManualTokenInputWithProject(BaseModel):
+    access_token: str
+    refresh_token: str
+    project_id: str = ""
+    expires_in: int = 3600
+    is_public: bool = False
+
+
 @router.post("/manual")
 async def manual_token_input(
-    token_input: ManualTokenInput,
+    token_input: ManualTokenInputWithProject,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """手动填入 Token"""
-    # 构建 Antigravity 格式的 token
-    antigravity_token = f"{token_input.access_token}|||{token_input.refresh_token}|||{token_input.expires_in}"
+    import time
     
-    # 尝试获取邮箱
+    # 尝试获取邮箱和 project_id
     email = None
+    project_id = token_input.project_id
+    
     try:
         async with httpx.AsyncClient(timeout=10) as client:
+            # 获取邮箱
             response = await client.get(
                 GOOGLE_USERINFO_URL,
                 headers={"Authorization": f"Bearer {token_input.access_token}"}
             )
             if response.status_code == 200:
                 email = response.json().get("email")
+            
+            # 如果没有提供 project_id，尝试获取
+            if not project_id:
+                try:
+                    projects_response = await client.get(
+                        "https://cloudresourcemanager.googleapis.com/v1/projects",
+                        headers={"Authorization": f"Bearer {token_input.access_token}"}
+                    )
+                    if projects_response.status_code == 200:
+                        projects = projects_response.json().get("projects", [])
+                        if projects:
+                            project_id = projects[0].get("projectId", "")
+                            print(f"[Manual] 自动获取 project_id: {project_id}", flush=True)
+                except:
+                    pass
     except:
         pass
+    
+    # 计算过期时间戳
+    expires_at = int(time.time()) + token_input.expires_in
+    
+    # 构建 token 格式: access_token|||refresh_token|||expires_at
+    stored_token = f"{token_input.access_token}|||{token_input.refresh_token}|||{expires_at}"
     
     # 保存 Token
     new_token = Token(
         user_id=user.id,
-        token=encrypt_token(antigravity_token),
+        token=encrypt_token(stored_token),
         email=email,
+        project_id=project_id,
         is_active=True,
         is_public=token_input.is_public,
         supports_claude=True,
@@ -235,5 +303,6 @@ async def manual_token_input(
     
     return {
         "message": "Token 添加成功",
-        "email": email
+        "email": email,
+        "project_id": project_id
     }

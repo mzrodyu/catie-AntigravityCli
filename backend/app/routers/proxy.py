@@ -1,15 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from datetime import date
-import httpx
 import json
 
 from app.database import get_db
 from app.models.user import User, UsageLog
 from app.services.auth import get_current_user
 from app.services.token_pool import TokenPool
+from app.services.gemini_client import GeminiClient
 from app.config import settings
 
 router = APIRouter(prefix="/v1", tags=["API代理"])
@@ -38,22 +38,19 @@ async def list_models(
     db: AsyncSession = Depends(get_db)
 ):
     """获取可用模型列表"""
-    # 获取一个 token 来查询模型
-    token_info = await TokenPool.get_token_for_request(db, user)
-    if not token_info:
-        return {"object": "list", "data": []}
+    base_models = [
+        "gemini-2.5-pro",
+        "gemini-2.5-flash",
+        "gemini-3-pro-preview",
+    ]
     
-    token_id, token = token_info
+    models = []
+    for base in base_models:
+        models.append({"id": base, "object": "model", "owned_by": "google"})
+        models.append({"id": f"假流式/{base}", "object": "model", "owned_by": "google"})
+        models.append({"id": f"流式抗截断/{base}", "object": "model", "owned_by": "google"})
     
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.get(
-                f"{settings.antigravity_api_base}/models",
-                headers={"Authorization": f"Bearer {token}"}
-            )
-            return response.json()
-    except Exception as e:
-        return {"object": "list", "data": [], "error": str(e)}
+    return {"object": "list", "data": models}
 
 
 @router.post("/chat/completions")
@@ -62,81 +59,72 @@ async def chat_completions(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """聊天补全 API"""
+    """聊天补全 API - 直接调用 Google Cloud API"""
     await check_quota(user, db)
     
     body = await request.json()
-    model = body.get("model", "")
+    model = body.get("model", "gemini-2.5-flash")
+    messages = body.get("messages", [])
     stream = body.get("stream", False)
+    
+    if not messages:
+        raise HTTPException(status_code=400, detail="messages 不能为空")
     
     # 获取 token
     token_info = await TokenPool.get_token_for_request(db, user, model)
     if not token_info:
         raise HTTPException(status_code=503, detail="没有可用的 Token，请上传或等待")
     
-    token_id, token = token_info
+    token_id, token_obj = token_info
+    
+    # 获取有效的 access_token（自动刷新）
+    access_token = await TokenPool.get_access_token(token_obj, db)
+    if not access_token:
+        await TokenPool.report_failure(db, token_id, "Token 刷新失败")
+        raise HTTPException(status_code=503, detail="Token 已失效，无法刷新")
+    
+    # 获取 project_id
+    project_id = token_obj.project_id or ""
+    
+    print(f"[Proxy] 使用 Token #{token_id}, project_id: {project_id}, model: {model}", flush=True)
     
     # 记录使用
     log = UsageLog(user_id=user.id, token_id=token_id, model=model)
     db.add(log)
     await db.commit()
     
-    try:
-        async with httpx.AsyncClient(timeout=300) as client:
-            if stream:
-                async def stream_response():
-                    try:
-                        async with client.stream(
-                            "POST",
-                            f"{settings.antigravity_api_base}/chat/completions",
-                            headers={
-                                "Authorization": f"Bearer {token}",
-                                "Content-Type": "application/json"
-                            },
-                            json=body
-                        ) as response:
-                            if response.status_code != 200:
-                                error_text = await response.aread()
-                                await TokenPool.report_failure(db, token_id, error_text.decode())
-                                yield f"data: {json.dumps({'error': error_text.decode()})}\n\n"
-                                return
-                            
-                            async for chunk in response.aiter_bytes():
-                                yield chunk
-                            
-                            await TokenPool.report_success(db, token_id)
-                    except Exception as e:
-                        await TokenPool.report_failure(db, token_id, str(e))
-                        yield f"data: {json.dumps({'error': str(e)})}\n\n"
-                
-                return StreamingResponse(
-                    stream_response(),
-                    media_type="text/event-stream",
-                    headers={
-                        "Cache-Control": "no-cache",
-                        "Connection": "keep-alive"
-                    }
-                )
-            else:
-                response = await client.post(
-                    f"{settings.antigravity_api_base}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {token}",
-                        "Content-Type": "application/json"
-                    },
-                    json=body
-                )
-                
-                if response.status_code != 200:
-                    await TokenPool.report_failure(db, token_id, response.text)
-                    raise HTTPException(status_code=response.status_code, detail=response.text)
-                
-                await TokenPool.report_success(db, token_id)
-                return response.json()
+    # 创建 Gemini 客户端
+    client = GeminiClient(access_token, project_id)
     
-    except httpx.TimeoutException:
-        await TokenPool.report_failure(db, token_id, "请求超时")
-        raise HTTPException(status_code=504, detail="请求超时")
+    try:
+        if stream:
+            async def stream_response():
+                try:
+                    async for chunk in client.chat_completions_stream(
+                        model=model,
+                        messages=messages,
+                        **{k: v for k, v in body.items() if k not in ["model", "messages", "stream"]}
+                    ):
+                        yield chunk
+                    await TokenPool.report_success(db, token_id)
+                except Exception as e:
+                    await TokenPool.report_failure(db, token_id, str(e))
+                    yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            
+            return StreamingResponse(
+                stream_response(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "Connection": "keep-alive"}
+            )
+        else:
+            result = await client.chat_completions(
+                model=model,
+                messages=messages,
+                **{k: v for k, v in body.items() if k not in ["model", "messages", "stream"]}
+            )
+            await TokenPool.report_success(db, token_id)
+            return JSONResponse(content=result)
+    
     except Exception as e:
         await TokenPool.report_failure(db, token_id, str(e))
         raise HTTPException(status_code=500, detail=str(e))
