@@ -53,8 +53,10 @@ async def list_models(
     
     # Claude 模型（通过 Antigravity 服务）
     claude_models = [
-        "claude-4.5",
-        "claude-4.5-op",
+        "claude-haiku-4.5",
+        "claude-opus-4.5",
+        "claude-opus-4.5-thinking",
+        "claude-sonnet-4.5",
     ]
     
     models = []
