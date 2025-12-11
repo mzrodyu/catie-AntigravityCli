@@ -97,10 +97,12 @@ export default function Dashboard({ user, onLogout, setUser }) {
   }
 
   const copyApiKey = () => {
-    const apiKey = `sk-${localStorage.getItem('token')?.slice(0, 32)}`
-    navigator.clipboard.writeText(apiKey)
-    setMessage({ type: 'success', text: 'API Key 已复制' })
-    setTimeout(() => setMessage(null), 2000)
+    const token = localStorage.getItem('token')
+    if (token) {
+      navigator.clipboard.writeText(token)
+      setMessage({ type: 'success', text: 'API Key 已复制（完整 JWT）' })
+      setTimeout(() => setMessage(null), 2000)
+    }
   }
 
   // OAuth 登录
